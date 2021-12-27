@@ -1,0 +1,539 @@
+---
+title: "Final Project"
+output:
+  word_document: default
+  html_document:
+    df_print: paged
+subtitle: Aidan Gannon, Jackie Dong, Zach Brown
+---
+
+## Introduction
+
+For our final project we decided to provide analysis of World Bank countries, in particular with regards to GNI per capita. We wanted to see the relationship that GNI per capita has with some different variables, focusing both on economic factors and social factors. Ultimately, our findings were illuminating and provide an interesting perspective to take into account when considering future policy.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(dpi=450,fig.width=7, fig.height = 4)
+```
+
+The libraries we use:
+
+```{r, warning = FALSE, message=FALSE}
+library(rvest,     quietly = TRUE, warn.conflicts = FALSE)
+library(dplyr,     quietly = TRUE, warn.conflicts = FALSE)
+library(tidyverse, quietly = TRUE, warn.conflicts = FALSE)
+library(ggplot2,   quietly = TRUE, warn.conflicts = FALSE)
+library(car,       quietly = TRUE, warn.conflicts = FALSE)
+library(ggpubr,    quietly = TRUE, warn.conflicts = FALSE)
+library(corrplot,  quietly = TRUE, warn.conflicts = FALSE)
+library(leaps,     quietly = TRUE, warn.conflicts = FALSE)
+library(MASS,      quietly = TRUE, warn.conflicts = FALSE)
+library(lindia,    quietly = TRUE, warn.conflicts = FALSE)
+library(patchwork, quietly = TRUE, warn.conflicts = FALSE)
+```
+
+## Data
+
+The data we included in our analysis revolves mostly around economic factors, though we included some other interesting variables. We looked at different countries' GNI (Gross National Income) per capita in US dollars. At its most basic, GNI is used to track a nation's wealth year over year. Here are the variables we considered as potential predictors of GNI:
+
+* Rural: percentage of total people living in rural areas, continuous variable
+* LifeExp: life expectancy at birth (years), continuous variable
+* CO2: carbon dioxide emissions (metric tons per capita), continuous variable
+* Diesel: diesel fuel pump price (US$ per liter), continuous variable
+* NATO: whether the country is a member of NATO, categorical variable
+* HappinessScore: a measure of the happiness of people in a country, continuous variable
+* Continent: what continent the country is on, categorical variable
+* PressFreedom: measure of how free the press of a country is, categorical variable
+* Inequality: measure of wealth inequality in a country, continuous variable
+
+We then web-scaped five of the columns for our dataset. We scrapped the ```inequality``` column from [Wikipedia](https://en.wikipedia.org/wiki/List_of_countries_by_wealth_inequality). It contains scores of the distribution of wealth in countries with a higher score corresponding to greater inequality in wealth distribution. Another added was ```NATO```, a categorical variable that denoted whether the country was in NATO. To get that data, we scraped a list of NATO countries from [Wikipedia](https://en.wikipedia.org/wiki/Member_states_of_NATO). Next, we added a tiered categorical variable, ```PressFreedom```. To acquire this data, we scraped a ranking from [here](https://rsf.org/en/ranking_table). We decided to include happiness data, column named ```HappinessScore```, for each country: how they rank in terms of total happiness and their happiness score. Finally, we added the ```Continent``` column.
+
+```{r, warning = FALSE}
+wb <- read.csv("http://www.reuningscherer.net/s&ds230/data/WB.2016.csv", header = TRUE, as.is = TRUE)
+
+url <- "https://en.wikipedia.org/wiki/List_of_countries_by_wealth_inequality"
+webpage <- read_html(url)
+inequalityIndex <- html_nodes(webpage, 'tr+ tr td:nth-child(4) , .table-na+ td:nth-child(4)')
+
+url2 <- "https://en.wikipedia.org/wiki/Member_states_of_NATO"
+webpage2 <- read_html(url2)
+memberNATO <- html_text(html_nodes(webpage2, 'td:nth-child(3)'))
+
+url3 <- "https://www.nationsonline.org/oneworld/press_freedom.htm"
+webpage3 <- read_html(url3)
+pressFreedom <- html_text(html_nodes(webpage3, 'td a'))
+
+Happiness <- read.csv("https://docs.google.com/spreadsheets/d/e/2PACX-1vQcZs4E3jhQdZEyfUJQTQ3ogqJ2YmHYZ1dCtVH3Xhi_DkbOfEzuMi7FBSPvteL6I4fOcIJWzukBBEMl/pub?gid=1586447313&single=true&output=csv")
+```
+
+### Data Cleaning
+
+In this section, we cleaned the data from the additional columns that we web-scraped as well as for the World Bank data itself. For many observations in the World Bank data, the country name was written in strange formats different from the country names from the web-scraped data, so we cleaned the World Bank country names to match our other data.
+
+For inequality, the cleaning involved using gsub to remove trailing/leading white space. Once the data was cleaned, we merged the data frame--consisting of the inequality score and country name--with the World Bank dataset. We then cleaned our NATO data, again using gsub and then merging our data frame with whether a country was in NATO or not with the World Bank data. For press freedom, after getting the rankings we separated countries into three categories--good, mediocre, and bad press freedom. Once the categories were created, we also merged that data with the World Bank data. Happiness was already fairly organized, so we simply renamed some of the columns for easier access and then merged that data into our final dataframe.
+
+Finally, the ```HappinessScore``` data came from a csv online, so it was already cleaned. The Happiness dataset also came with a column  that labeled each country's region. We cleaned that column to create the ```Continent``` column by using ```gsub``` to change regions into continents. After the data was all cleaned, we selected what specific columns we wanted and created a new dataset called ```wb_final``` with those columns.
+
+```{r, warning = FALSE}
+# Cleaning wb$Country to make dataframe merging easier
+wb$Country <- gsub(" Darussalam", "", wb$Country)
+wb$Country <- gsub("Syrian Arab Republic", "Syria", wb$Country)
+wb$Country <- gsub("Macedonia", "North Macedonia", wb$Country)
+wb$Country <- gsub("Timor-Leste", "East Timor", wb$Country)
+wb$Country <- gsub("Lao PDR", "Laos", wb$Country)
+wb$Country <- gsub("Kyrgyz Republic", "Kyrgyzstan", wb$Country)
+wb$Country <- gsub("Russian Federation", "Russia", wb$Country)
+wb$Country <- gsub("Congo, Dem. Rep.", "DR Congo", wb$Country)
+wb$Country <- gsub("Korea, Rep.", "South Korea", wb$Country)
+wb$Country <- gsub("Korea, Dem. People\x92s Rep.", "North Korea", wb$Country)
+wb$Country <- gsub("Great Britain", "United Kingdom", wb$Country)
+wb$Country <- gsub(",.*", "", wb$Country)
+
+# Data Cleaning for inequality
+inequalityIndex <- as.numeric(html_text(inequalityIndex))
+countries <- html_text(html_nodes(webpage, 'td:nth-child(1)'))
+countries <- countries[1:181]
+countries <- gsub("\\..*", "", countries)
+countries <- gsub("[(].*", "", countries)
+countries <- gsub("^\\s+|\\s+$", "", countries)
+countries <- gsub("Great Britain", "United Kingdom", countries)
+inequality <- data.frame(Country = countries,inequality = inequalityIndex)
+wb_new1 <- merge(wb, inequality, by = "Country")
+```
+
+In the previous section, we cleaned the ```Country``` column in the ```World Bank``` data set and cleaned and merged the inequality data with the ```World Bank``` data. We won't show the rest of the data cleaning, but it's in the ```Rmd``` file.
+
+```{r, warning = FALSE, echo = FALSE}
+# Data Cleaning for NATO
+memberNATO <- memberNATO[1:30]
+memberNATO <- gsub("\\n", "", memberNATO)
+NATO <- data.frame(Country = memberNATO,
+                   NATO = rep("Member", 30))
+non_member_NATO <- setdiff(wb$Country, memberNATO)
+non_NATO <- data.frame(Country = non_member_NATO,
+                       NATO = rep("Non Member",length(non_member_NATO)))
+
+wb_new2 <- merge(wb_new1, rbind(NATO, non_NATO), by = "Country")
+
+# Data Cleaning for Press Freedom
+pressFreedom <- pressFreedom[36:212]
+pressFreedom <- gsub("^\\s+|\\s+$", "", pressFreedom)
+pressFreedom <- gsub("Russian Federation", "Russia", pressFreedom)
+goodPressFreedom <- data.frame(Country = pressFreedom[1:40],
+                               PressFreedom = "Good")
+mediocrePressFreedom <- data.frame(Country = pressFreedom[41:107],
+                                   PressFreedom = "Mediocre")
+badPressFreedmom <- data.frame(Country = pressFreedom[108:177],
+                               PressFreedom = "Bad")
+
+
+wb_new3 <- merge(wb_new2, rbind(goodPressFreedom, mediocrePressFreedom, badPressFreedmom), by = "Country")
+
+# Data Cleaning for Happiness
+colnames(Happiness)[3] <- "HappinessRank"
+colnames(Happiness)[4] <- "HappinessScore"
+colnames(Happiness)[5] <- "LowerConfidenceInterval"
+colnames(Happiness)[6] <- "UpperConfidenceInterval"
+colnames(Happiness)[7] <- "GDPperCapita"
+colnames(Happiness)[9] <- "LifeExpectancy"
+colnames(Happiness)[11] <- "GovernmentCorruption"
+colnames(Happiness)[13] <- "DystopiaResidual"
+wb_happiness <- merge(wb_new3, Happiness, "Country")
+
+# Adding new column to wb_happiness
+wb_happiness$Continent <- wb_happiness$Region
+wb_happiness$Continent <- gsub(".*Europe.*", "Europe", wb_happiness$Continent)
+wb_happiness$Continent <- gsub(".*Africa.*", "Africa", wb_happiness$Continent)
+wb_happiness$Continent <- gsub(".*Asia.*", "Asia", wb_happiness$Continent)
+wb_happiness$Continent <- gsub(".*Caribbean.*", "South America", wb_happiness$Continent)
+wb_happiness$Continent <- gsub(".*Latin America.*", "South America", wb_happiness$Continent)
+wb_happiness$Continent[wb_happiness$Continent == "North America" |
+                         wb_happiness$Continent == "Australia and New Zealand" |
+                         wb_happiness$Continent == "Asia"] <- "Other"
+
+wb_final <- wb_happiness[ , c("Country", "GNI", "HappinessScore", "inequality", "PressFreedom", "Rural", "LifeExp", "CO2", "Diesel", "NATO", "Continent")]
+
+wb_final$LogGNI <- log(wb_final$GNI)
+wb_final <- wb_final[complete.cases(wb_final), ]
+dim(wb_final)
+```
+
+Our final data frame consists of 132 observations with 12 variables each.
+
+##  Graphics
+
+First, to get a feel for the data, we will look at boxplots of GNI per capita by NATO affiliation.
+
+```{r, warning = FALSE, echo = FALSE}
+ggplot(wb_final, aes(x = NATO, y = GNI)) +
+  labs(title = "Boxplot of GNI by NATO Affiliation",
+       x = "NATO Affiliation", y = "GNI per Capita") +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 16)) + 
+  theme(axis.title = element_text(face = "bold", size = 13)) + 
+  geom_boxplot(color = "black", fill = "steelblue1", lwd = 1)  +
+  coord_flip() +
+  geom_jitter(width = 0.15, alpha = 0.5) 
+```
+
+This plot is very right skewed, and the extreme skew makes differences between the two groups hard to see, although it seems that non-NATO countries potentially have higher rates of gun deaths. In order to get a better feel for the data, we'll look at the same boxplot but with log GNI.
+
+```{r, warning = FALSE, echo = FALSE}
+ggplot(wb_final, aes(x = NATO, y = log(GNI))) +
+  labs(title = "Boxplot of Log GNI per Capita by NATO Affiliation",
+       x = "NATO Affiliation", y = "Log GNI per Capita") +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 16)) + 
+  theme(axis.title = element_text(face = "bold", size = 13)) + 
+  geom_boxplot(color = "black", fill = "steelblue1", lwd = 1) +
+  coord_flip() +
+  geom_jitter(width = 0.15, alpha = 0.5)
+```
+
+In this plot, the differences between the two groups is much easier to see. It looks like NATO member countries tend to have greater GNI per capita than non-NATO countries.
+
+We'll also look at a boxplot of log GNI per capita by continent, just to get a better sense of how data vary geographically.
+
+```{r, warning = FALSE, echo = FALSE}
+wb_final %>% ggplot(aes(x = Continent, y = log(GNI))) +
+  labs(title = "Boxplot of Log GNI per Capita by Continent",
+       x = "Continent", y = "Log GNI per Capita") +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 20)) + 
+  theme(axis.title = element_text(face = "bold", size = 15)) + 
+  geom_boxplot(aes(color = Continent, fill = Continent), lwd = 1) + scale_color_manual(values = c("black","black", "black", "black")) + scale_fill_manual(values = c("steelblue4","steelblue3", "steelblue2", "steelblue1")) + 
+  coord_flip() +
+  geom_jitter(width = 0.15, alpha = 0.5)
+```
+
+From this boxplot, we see that European countries tend to have a greater GNI per capita than countries on other continents.
+
+Now, let's look at a histogram of GNI per capita.
+
+```{r, warning = FALSE, echo = FALSE}
+ggplot(wb_final, aes(x = GNI)) +
+  geom_histogram(fill = "indianred1", color = "black", bins = 15) +
+  labs(title = "Histogram of GNI per Capita",
+       x = "GNI per Capita", y = "Frequency") +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 20)) + 
+  theme(axis.title = element_text(face = "bold", size = 15)) + 
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+This histogram of GNI per capita shows a heavy right skew which we will need to correct for later on. The second plot, a normal quantile plot of the same data, confirms this as the data is definitely not normally distributed and indicates a right skew. We'll look at normal quantile plot to test the normality of the distribution of GNI per capita.
+
+```{r, echo = FALSE}
+ggqqplot(wb_final, x = "GNI", color = "blue", lwd = 2, ggtheme = theme_gray()) + labs(title = "Normal Quantile Plot of GNI per Capita", y = "GNI per Capita") + theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 20)) + 
+  theme(axis.title = element_text(face = "bold", size = 15)) 
+```
+
+The normal quantile plot confirms what we had suspected: the distribution of GNI per capita is not normal.
+
+## Analysis
+
+### Basic Tests
+
+#### T-test and Bootstrap
+
+Here, we will perform a t-test to compare the mean GNI per capita between NATO countries and non-NATO countries.
+
+```{r, echo = FALSE}
+(test1 <- t.test(log(wb_final$GNI) ~ wb_final$NATO))
+
+N <- 10000
+bootres <- rep(NA, N)
+for (i in 1:N) {
+  nato <- sample(log(wb_final$GNI[wb_final$NATO == "Member"]),
+                 sum(wb_final$NATO == "Member"),
+                 replace = TRUE)
+  notNATO <- sample(log(wb_final$GNI[wb_final$NATO == "Non Member"]),
+                 sum(wb_final$NATO == "Non Member"),
+                 replace = TRUE)
+  bootres[i] <- mean(nato) - mean(notNATO)
+}
+bootCI <- quantile(bootres, c(0.025, 0.975))
+round(bootCI, 2)
+round(test1$conf.int, 2)
+theoCI <- test1$conf.int
+CIs <- data.frame(boot = bootCI,
+                  bootlab = "boot",
+                  theo = theoCI,
+                  theolab = "theo")
+
+data.frame(res <- bootres) %>% 
+  ggplot(aes(bootres)) +
+  geom_histogram(bins = 50, fill = "lightpink1", color = "black", lwd = 0.08) +
+  geom_vline(aes(xintercept = boot, color = bootlab), data = CIs, linetype = 2, lwd = 1) +
+  geom_vline(aes(xintercept = theo, color = theolab), data = CIs, linetype = 1, lwd = 1) +
+  labs(title = "Bootstrapped Difference in Means of Log GNI per Capita Between NATO and non-NATO",
+       x = "Difference in Means", y = "Frequency", color = "95% CI",
+       subtitle = paste0("Bootstrapped CI: (", round(bootCI[1], 2), ", ", round(bootCI[2], 2), "); Theoretical CI: (", round(theoCI[1], 2), ", ", round(bootCI[2], 2), ")")) +
+  scale_color_manual(labels = c("Boot CI", "Theo CI"),
+                     values = c("red", "black")) +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 11)) + 
+  theme(axis.title = element_text(face = "bold", size = 11)) + 
+  theme(plot.subtitle = element_text(hjust = 0.5, face = "italic")) +
+  theme(legend.position = "bottom")
+```
+
+The t-test and the confidence intervals have the same conclusion: we can reject the null hypothesis that there is no difference between the mean log rate of gun deaths per 100,000 people between NATO and non-NATO countries. The t-test had a p-value of 0.000000000001604, which is less than our significance level of 0.05. As seen on the plot, both the theoretical 95% CI, taken from the t-test, and the bootstrapped 95% CI had similar bounds. For both confidence intervals, the lower bound is greater than 0, again showing that we can reject the null hypothesis that the difference in means between the groups is 0.
+
+#### Permutation Test
+
+Here, we perform a permutation test to compare the median log GNI per capita across NATO and non-NATO countries.
+
+```{r, echo = FALSE}
+actualdiff <- median(log(wb_final$GNI[wb_final$NATO == "Member"])) - median(log(wb_final$GNI[wb_final$NATO == "Non Member"]))
+
+N <- 10000
+diffvals <- rep(NA, N)
+for (i in 1:N) {
+  fakeNATO <- sample(wb_final$NATO)
+  diffvals[i] <- median(log(wb_final$GNI[fakeNATO == "Member"])) - median(log(wb_final$GNI[fakeNATO == "Non Member"]))
+}
+
+pval <- mean(abs(diffvals) >= abs(actualdiff))
+
+data.frame(res = diffvals) %>% 
+  ggplot(aes(x = res)) +
+  geom_histogram(bins = 50, fill = "lightpink1", col = "black", lwd = 0.5) +
+  geom_text(x = actualdiff - 0.0495, y = 500,
+            label = paste0("Actual Difference = ", round(actualdiff, 2)), angle = 90) +
+  geom_vline(xintercept = actualdiff) +
+  labs(title = "Permuted Sample Median Diff in Log GNI per Capita in NATO and non-NATO",
+       x = "Sample Difference in Median Log GNI per Capita",
+       y = "Frequency",
+       subtitle = paste0("Actual Difference = ", round(actualdiff, 3),
+                         "; p-value = ", round(pval, 3))) +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 11)) + 
+  theme(axis.title = element_text(face = "bold", size = 11)) + 
+  theme(plot.subtitle = element_text(hjust = 0.5, face = "italic"))
+```
+
+The null hypothesis is that there is no difference between the median GNI per capita for NATO countries and non-NATO countries in 2016. From the permutation test, we calculated the p-value to be 0, which is less than our alpha level of 0.05, meaning that we can reject the null hypothesis. This rejection means that the actual difference in medians (1.622) is not probable given the null hypothesis is true. This finding is in line with what we found in the t-test about the difference in mean log GNI per capita between NATO and non-NATO countries. In both tests, we rejected the null hypothesis.
+
+#### Correlation
+
+Now, we'll look at the correlation between log GNI per capita and the happiness score.
+
+```{r, echo = FALSE}
+cor1 <- cor(log(wb_final$GNI), wb_final$HappinessScore)
+
+N <- 10000
+corres <- rep(NA, N)
+for (i in 1:N) {
+  fakeData <- sample(nrow(wb_final), replace = TRUE)
+  tempGNI <- wb_final[fakeData, "GNI"]
+  tempHappy <- wb_final[fakeData, "HappinessScore"]
+  corres[i] <- cor(log(tempGNI), tempHappy)
+}
+corCI <- quantile(corres, c(0.025, 0.975))
+
+ggplot(wb_final, aes(x = log(GNI), y = HappinessScore, color = NATO)) +
+  geom_point(na.rm = TRUE, size = 2) +
+  labs(title = "Happiness Score vs. Log GNI per Capita",
+       x = "Log GNI per Capita",
+       y = "Happiness Score",
+       subtitle = paste0("Correlation = ", round(cor1, 2), "; 95% CI: (",
+                         round(corCI[1], 2), ", ", round(corCI[2], 2), ")")) +
+  scale_color_manual(values = c("mediumpurple1","palevioletred1")) +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 20)) + 
+  theme(axis.title = element_text(face = "bold", size = 15))  +
+  theme(plot.subtitle = element_text(hjust = 0.5, face = "italic"))
+```
+
+In this plot, we examined how related a country's happiness score is to its log GNI per capita. We were curious to see this relationship because statistics like GNI and GDP are often criticized for their ubiquity since they are measures of production/income not well-being. The happiness score takes into account these "well-being" metrics such as social support, freedom, life expectancy, and education level. This strong correlation (0.86) between log GNI per capita and happiness score seems to suggest that high production/income is a good indicator of these other gauges that are more related to the happiness and well-being of people. We chose to color the points by NATO status just to get a visual sense of how NATO countries compare to non-NATO countries in terms of happiness and GNI.
+
+```{r, echo = FALSE}
+cor1test <- cor.test(log(wb_final$GNI), wb_final$HappinessScore)
+data.frame(corres = corres) %>% 
+ ggplot(aes(corres)) +
+  geom_histogram(bins = 50, fill = "lightpink1", color = "black", lwd = 0.08) +
+  geom_vline(aes(xintercept = corCI, color = bootlab), data = CIs, linetype = 2, lwd = 1) +
+  geom_vline(aes(xintercept = cor1test$conf.int, color = theolab), data = CIs, linetype = 1, lwd = 1) +
+  labs(title = "Bootstrapped Correlation Between Happiness Score and Log GNI per Capita",
+       x = "Correlation", y = "Frequency", color = "95% CI",
+       subtitle = paste0("Bootstrapped CI: (", round(corCI[1], 2), ", ", round(corCI[2], 2), "); Theoretical CI: (", round(cor1test$conf.int[1], 2), ", ", round(cor1test$conf.int[2], 2), ")")) +
+  scale_color_manual(labels = c("Boot CI", "Theo CI"),
+                     values = c("red", "black")) +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 10)) + 
+  theme(axis.title = element_text(face = "bold", size = 15)) + 
+  theme(plot.subtitle = element_text(hjust = 0.5, face = "italic")) +
+  theme(legend.position = "bottom")
+```
+
+The null hypothesis is that the true correlation between log GNI per capita and Happiness score is 0. In both the cor-test and the confidence intervals we can reject the null hypothesis.. The cor-test had a p-value of 2.2e-16, which is less than our significance level of 0.05. As seen on the plot, both the theoretical 95% CI, taken from the cor-test, and the bootstrapped 95% CI had similar bounds, though the bootstrap CI was slightly smaller. For both confidence intervals, the lower bound is greater than 0, again showing that we can reject the null hypothesis that the difference in means between the groups is 0.
+
+## Ancova
+
+After concluding that the median and mean LogGNI per capita between Nato members and non-members is statistically significantly different, we decided to perform an ANCOVA analysis of the interaction effect between Happiness Score and NATO affiliation when predicting the LogGNI of countries. We then visualize our results using a scatter plot and lines of best fit generated from the summary information. 
+
+```{r, warning = FALSE, echo = FALSE}
+wb_temp <- wb_final[, c("LogGNI", "NATO", "HappinessScore")]
+wb_temp <- na.omit(wb_temp)
+wb_temp$StudentResidlm1 <- rstudent(lm(LogGNI ~ HappinessScore + NATO + NATO*HappinessScore, data = wb_temp))
+wb_temp$ModelFitValueslm1 <- lm(LogGNI ~ HappinessScore + NATO + NATO*HappinessScore, data = wb_temp)$fitted.values
+
+ancova_1 <- lm(LogGNI ~ HappinessScore + NATO + NATO*HappinessScore, data = wb_final)
+summary(ancova_1)
+(coefs <- coef(ancova_1))
+
+ggplot(data = wb_final, aes(x = HappinessScore, y = LogGNI, col = NATO)) + geom_point(size = 2) + scale_color_manual(values = c("mediumpurple1","palevioletred1")) + labs(title = "LogGNI vs. Happiness Score by NATO Affiliation", x = "Happiness Score", y = "Log GNI") +  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 16)) + 
+  theme(axis.title = element_text(face = "bold", size = 16))  +  geom_abline(intercept = coefs[1], slope = coefs[2], col = "mediumpurple1") + geom_abline(intercept = coefs[1] + coefs[3], slope = coefs[2] + coefs[4], col = "palevioletred1")
+```
+
+From our summary statistics of our generalized linear model predicting the Log GNI per capita of countries from Happiness Score, NATO, and the interaction between Happiness Score and NATO, we can see that all three predictive coefficients are statistically significant in our model, as their p-values (1.00e-06, 0.00268, 0.03074 respectively) are all less than our alpha level of 0.05. Additionally, from our summary statistic we can also see conclude that this is a model of strong fit as our R-squared value is 0.79, which indicates that 79% of the variance in our y-variable (LogGNI per Capita) is accounted for by our regression model.
+
+From our coefficients, we can analyze the association between our predictors variables and response variables. Our Happiness Score coefficient tells us that for every one increase in Happiness Score, our predicted Log GNI per capita increases by 0.7621. Our Nato Non Member term indicates that if our country is not a member of NATO, there is a shift in our regression line of -2.84 Log GNI per capita. The interaction term (HappinessScore and non-NATO) has a coefficient of 0.3345, meaning that if a country is not in NATO, increases in their happiness score correspond to greater increases in log GNI per capita compared to countries that are in NATO.
+
+```{r, warning = FALSE, echo = FALSE}
+X <- ggqqplot(wb_temp, x = "StudentResidlm1", color = "blue", lwd = 2, ggtheme = theme_gray()) + labs(title = "NQ Plot of Studentized Residuals", y = "Studentized Residuals") +  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 14)) + 
+  theme(axis.title = element_text(face = "bold", size = 12))  
+
+Y <- ggplot(data = wb_temp, aes(x = ModelFitValueslm1, y = StudentResidlm1)) + geom_point(size = 2, col = "indianred1") + 
+labs(title = "Fits vs. Studentized Residuals", x = "Fitted Values", y = "Studentized Residuals") +  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 14)) + 
+  theme(axis.title = element_text(face = "bold", size = 12))  + geom_hline(yintercept = 0, lwd = 1) + geom_hline(yintercept = c(3, -3), lwd = 1, col = "lightgreen", lty = 2) +
+geom_hline(yintercept = c(2, -2), lwd = 1, col = "cornflowerblue", lty = 2) 
+
+X + Y
+```
+
+We finally checked if our ANCOVA model assumptions were met using residual plots. Our normal quantile plot of studentized residuals appears to be approximately linear, indicating that our assumption of our distribution of errors coming from an approximately normal distribution is satisfied. Our fits vs. residuals plots also displays no heteroskedasticity as the spread across fitted values seems to be approximately the same. Lastly, there is no evidence of a non-linear pattern in our plot. 
+
+### Two-way ANOVA
+
+Here, we examine the influence Continent and Press Freedom have on log GNI per capita. The goal is to assess the effects of each variable and determine if there is any interaction between them. We begin with an interaction plot.
+
+```{r, warning = FALSE, echo = FALSE}
+means <- aggregate(x=log(wb_final$GNI),
+          by=list(wb_final$Continent, wb_final$PressFreedom),
+          FUN=mean)
+temp <- wb_final
+temp$meanGNI <- NA
+for (i in 1:132) {
+  if(wb_final[i,]$Continent == "Africa" & wb_final[i,]$PressFreedom == "Bad")
+    temp[i,]$meanGNI <- means[1, 3]
+  if(wb_final[i,]$Continent == "Europe" & wb_final[i,]$PressFreedom == "Bad")
+    temp[i,]$meanGNI <- means[2, 3]
+  if(wb_final[i,]$Continent == "Other" & wb_final[i,]$PressFreedom == "Bad")
+    temp[i,]$meanGNI <- means[3, 3]
+  if(wb_final[i,]$Continent == "South America" & wb_final[i,]$PressFreedom == "Bad")
+    temp[i,]$meanGNI <- means[4, 3]
+  if(wb_final[i,]$Continent == "Africa" & wb_final[i,]$PressFreedom == "Good")
+    temp[i,]$meanGNI <- means[5, 3]
+  if(wb_final[i,]$Continent == "Europe" & wb_final[i,]$PressFreedom == "Good")
+    temp[i,]$meanGNI <- means[6, 3]
+  if(wb_final[i,]$Continent == "Other" & wb_final[i,]$PressFreedom == "Good")
+    temp[i,]$meanGNI <- means[7, 3]
+  if(wb_final[i,]$Continent == "South America" & wb_final[i,]$PressFreedom == "Good")
+    temp[i,]$meanGNI <- means[8, 3]
+  if(wb_final[i,]$Continent == "Africa" & wb_final[i,]$PressFreedom == "Mediocre")
+    temp[i,]$meanGNI <- means[9, 3]
+  if(wb_final[i,]$Continent == "Europe" & wb_final[i,]$PressFreedom == "Mediocre")
+    temp[i,]$meanGNI <- means[10, 3]
+  if(wb_final[i,]$Continent == "Other" & wb_final[i,]$PressFreedom == "Mediocre")
+    temp[i,]$meanGNI <- means[11, 3]
+  if(wb_final[i,]$Continent == "South America" & wb_final[i,]$PressFreedom == "Mediocre")
+    temp[i,]$meanGNI <- means[12, 3]
+}
+
+temp %>% 
+  ggplot(aes(PressFreedom, meanGNI)) +
+  geom_line(size = 1.2, aes(group = Continent, color = Continent)) + scale_color_manual(values = c("aquamarine2","palevioletred1", "mediumpurple1", "firebrick1")) + 
+  geom_point(size = 2.6, aes(color = Continent), shape = 15) +
+  labs(
+    title = "Interaction between Continent and Press Freedom for Log GNI per Capita",
+    x = "Press Freedom",
+    y = "Continent"
+  ) +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 12)) + 
+  theme(axis.title = element_text(face = "bold", size = 12))  
+```
+
+From this plot, there does seem to be some interaction between continent and press freedom.  The relative mean log GNI per capita based on continent seems to change depending on the level of press freedom. For example, the Other continent (consisting of North America, some of Asia, and Oceania), has the lowest log GNI per capita with Bad press freedom but the highest with Good press freedom.
+
+Now, we will fit a two-way ANOVA model to see if there are significant interaction terms.
+
+```{r, echo = FALSE}
+m1 <- lm(log(wb_final$GNI) ~ wb_final$Continent + wb_final$PressFreedom + wb_final$Continent*wb_final$PressFreedom)
+(aov1 <- Anova(m1, type = "III"))
+```
+
+From the summary, we see that the interaction of Continent and PressFreedom is statistically significant (p-value 0.01551). This finding is consistent with what we found in the interaction plot, but it's interesting to note that according to the two-way ANOVA, Continent is not a statistically significant term.
+
+To save space, we did not include the residual plots. The normal quantile plot is approximately linear, which is reasonable given our assumption of normally distributed errors. The plot of fits vs. studentized residuals has multiple outliers though, which isn't ideal. There does not appear to be much heteroskedasticity on the residual plots, although the variance of the residuals seems to decrease as the fitted values increase, suggesting a not equal standard deviation for all the residuals.
+
+## Multiple Linear Regression
+
+Finally, we fit a best subsets model based on the Bayesian Information Criterion analysis method. The goal was to see which variables were best at predicting GNI per capita. We chose the best subsets model because we wanted to examine many different possible models and choose the best from there. We used Bayesian Information Criteria because we used that one on homeworks before and because it has a larger penalty for extra predictors than the Akaike information criterion.
+
+```{r, warning = FALSE, echo = FALSE}
+wb_final2 <- wb_final[, c("GNI", "inequality", "HappinessScore", "Rural", "LifeExp", "CO2", "Diesel")]
+model <- regsubsets(GNI ~., data = wb_final2, nvmax = 7)
+modelsum <- summary(model)
+modelnum <- which.min(modelsum$bic)
+names(wb_final2)[modelsum$which[modelnum, ]][-1]
+wb_final2temp <- wb_final2[, modelsum$which[modelnum, ]]
+modfinal <- lm(GNI~., data = wb_final2temp)
+summary(modfinal)
+```
+
+From our summary statistics of our fitted model based on the BIC criteria, we can see that the three variables that ended up as significant predictors of GNI per capita were Happiness Score, CO2, and Diesel, as their p-values (2.06e-14, 9.63e-13, 5.86e-14 respectively) are all less than our significance level of .05. Let’s check our model assumptions now with some **awesome** residual plots!
+
+```{r, echo = FALSE}
+wb_temp <- wb_final2temp
+wb_temp$StudentResidlm2 <- rstudent(modfinal)
+wb_temp$ModelFitValueslm2 <- lm(modfinal)$fitted.values
+
+x <- ggqqplot(wb_temp, x = "StudentResidlm2", color = "blue", lwd = 2, ggtheme = theme_gray()) + labs(title = "NQ Plot of Studentized Residuals", y = "Studentized Residuals") +  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 14)) + 
+  theme(axis.title = element_text(face = "bold", size = 12))
+
+y <- ggplot(data = wb_temp, aes(x = ModelFitValueslm2, y = StudentResidlm2)) + geom_point(size = 2, col = "indianred1") + 
+labs(title = "Fits vs. Studentized Residuals", x = "Fitted Values", y = "Studentized Residuals") + theme(plot.title = element_text(hjust = 0.5)) + geom_hline(yintercept = 0, lwd = 1) + geom_hline(yintercept = c(3, -3), lwd = 1, col = "lightgreen", lty = 2) +
+geom_hline(yintercept = c(2, -2), lwd = 1, col = "cornflowerblue", lty = 2) +  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 14)) + theme(axis.title = element_text(face = "bold", size = 12))  
+
+x + y
+```
+
+Despite a few outliers exceeding a studentized residual of 3, our normal quantile plot for our studentized residuals appears approximately linear, indicating that our model assumption of our model errors coming from an approximately normal distribution is satisfactory. However, there are some evident issues of heteroskedasticity in our plots of fits vs. residuals, as there are large outliers associated with larger fitted values. The most concerning thing is not even the illustrated heteroskedasticity, but rather the non-linear pattern (potentially quadratic). This nullifies our assumption of linearity. 
+
+We then decided to perform a box cox transformation of our model because of the evident curvature in the fits vs. residuals plot
+
+```{r, echo = FALSE}
+gg_boxcox(modfinal) + theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 20)) + 
+  theme(axis.title = element_text(face = "bold", size = 15))  
+```
+
+From the boxcox, we can see a suggested lambda of approximately 0.2. However, we would rather take a log transformation of our GNI per capita than take the fifth root. We then proceeded to perform a best subsets regression with logGNI per capita and fit the model.
+
+```{r, echo = FALSE, warning = FALSE}
+wb_boxcox <- wb_final[, c("LogGNI", "inequality", "HappinessScore", "Rural", "LifeExp", "CO2", "Diesel")]
+model2 <- regsubsets(LogGNI ~., data = wb_boxcox, nvmax = 7)
+modelsum2 <- summary(model2)
+modelnum2 <- which.min(modelsum2$bic)
+names(wb_boxcox)[modelsum2$which[modelnum2, ]][-1]
+wb_boxcoxtemp <- wb_boxcox[, modelsum2$which[modelnum2, ]]
+modfinal2 <- lm(LogGNI~., data = wb_boxcoxtemp)
+summary(modfinal2)
+```
+
+What we noticed is that after performing our log transformation on GNI, we gained two new significant predictors Rural and Life Expectancy. From our summary statistics of our fitted model based on the BIC criteria, we can see that the five variables that ended up as significant predictors of GNI per capita were Happiness Score, CO2, Rural, LifeExpectancy, and Disel as their p-values (2.42e-07, 9.68e-07,6.76e-10, 2.36e-13, and 5.75e-07 respectively) are all less than our significance level of .05. Also, our R-squared value has improved and is now 0.9041, indicating that 90.41% of the variance in our y-variable (Log GNI per capita) is accounted for by our regression model. This indicates that our model is extremely predictive! Let’s check our model assumptions again with some **awesome** residual plots!
+
+```{r, echo = FALSE, warning = FALSE}
+wb_temp2 <- wb_boxcoxtemp
+wb_temp2$StudentResidlm2 <- rstudent(modfinal2)
+wb_temp2$ModelFitValueslm2 <- lm(modfinal2)$fitted.values
+
+x <- ggqqplot(wb_temp2, x = "StudentResidlm2", color = "blue", lwd = 2, ggtheme = theme_gray()) + labs(title = "NQ Plot of Studentized Residuals", y = "Studentized Residuals") +  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 14)) + 
+  theme(axis.title = element_text(face = "bold", size = 12))
+
+y <- ggplot(data = wb_temp2, aes(x = ModelFitValueslm2, y = StudentResidlm2)) + geom_point(size = 2, col = "indianred1") + 
+labs(title = "Fits vs. Studentized Residuals", x = "Fitted Values", y = "Studentized Residuals") +  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 14)) + 
+  theme(axis.title = element_text(face = "bold", size = 12)) + geom_hline(yintercept = 0, lwd = 1) + geom_hline(yintercept = c(3, -3), lwd = 1, col = "lightgreen", lty = 2) +
+geom_hline(yintercept = c(2, -2), lwd = 1, col = "cornflowerblue", lty = 2)
+
+x + y
+```
+
+Following our transformation, there are no longer residuals with an absolute value of greater than 3 present in either or normal quantile plot or fits vs. residuals plot . Our normal quantile plot for our studentized residuals appears approximately linear, indicating that our model assumption of our model errors coming from an approximately normal distribution is satisfactory. There are no longer issues of heteroskedasticity in our plots of fits vs. residuals and there is no longer any evidence that there is a non-linear pattern. Our Sisyphean assumptions have been met!
+
+## Conclusion and Summary
+
+Our analysis of GNI per capita proved to be a really interesting experiment in data cleaning and analysis. We found that Happiness Score, Life Expectancy, C02 Emissions, Diesel Fuel Pump Prices, and the Percentage of People Living in Rural Areas all significantly predict a country's GNI per capita. We were surprised some of these were included, while inequality was left out. Ultimately, this conclusion is mostly logical. As people live longer, they are more likely to work longer, which would increase the GNI of a nation. Similarly, happy people are more productive. The negative relationship between the percentage of people living in a rural area and GNI, is interesting and may speak to higher wages earned by people living in urban areas. C02 emissions, while bad for the environment, do indicate more industrial activity that contributes to GNI. Finally, diesel fuel pump price is the one predictor that is the hardest to explain. Perhaps, countries with higher prices use more diesel, which could also indicate more industrial activity. In any case, this analysis provides an interesting perspective on some of the potential relationships between GNI and socio-economic variables.
